@@ -4,7 +4,9 @@ Main comparison pipeline for parametric TC wind profiles.
 
 For each valid snapshot in the IBTrACS catalog:
   1. Reconstruct radial wind profile with each of the 6 models
-     (+ Chavas-clim as a 7th configuration)
+     (Chavas2015 is now the proper CLE15 implementation; r0 is
+     solved internally, so the old 'Chavas_clim' configuration
+     is no longer needed.)
   2. Extract predicted wind radii (R34, R50, R64) from each profile
   3. Compare against observed JTWC wind radii
   4. Compute error metrics by intensity category, latitude band, size class
@@ -12,20 +14,20 @@ For each valid snapshot in the IBTrACS catalog:
 
 Outputs:
   - metrics_by_snapshot.csv  (per-snapshot, per-model errors)
-  - metrics_summary_v3.csv   (aggregated statistics with bootstrap CIs & r)
+  - metrics_summary_v4.csv   (aggregated statistics with bootstrap CIs & r)
 """
 
 import pandas as pd
 import numpy as np
 from scipy.stats import pearsonr
-from wind_profiles import PROFILES, chavas2015
+from wind_profiles import PROFILES
 import warnings
 warnings.filterwarnings('ignore', category=RuntimeWarning)
 
 # ═══════════════════════════════════════════════════════════════
 # Configuration
 # ═══════════════════════════════════════════════════════════════
-INPUT_CSV  = r'D:\2026\ParametricWindModel\Models\snapshot_catalog.csv'
+INPUT_CSV  = r'D:\2026\ParametricWindModel\CorrectedScripts\snapshot_catalog.csv'
 OUTPUT_DIR = r'D:\2026\ParametricWindModel\NEWOUTS'
 N_BOOT     = 1000   # bootstrap iterations for 95% CI
 
@@ -116,9 +118,9 @@ print(f"  With R50: {df['OBS_R50'].notna().sum()}")
 print(f"  With R64: {df['OBS_R64'].notna().sum()}")
 
 # ═══════════════════════════════════════════════════════════════
-# Model registry: 6 profiles + Chavas-clim as 7th
+# Model registry: 6 profiles
 # ═══════════════════════════════════════════════════════════════
-model_names = list(PROFILES.keys()) + ['Chavas_clim']
+model_names = list(PROFILES.keys())
 
 # ═══════════════════════════════════════════════════════════════
 # Run all profiles on all snapshots
@@ -137,13 +139,11 @@ for idx, (i, row) in enumerate(df.iterrows()):
     rmax     = row['USA_RMW']
     lat      = row['LAT']
     pc       = row['USA_PRES']
-    r34_mean = row['OBS_R34']
 
     params = dict(
         r=r_grid, vmax=vmax, rmax=rmax, lat=lat,
         pc=pc if pd.notna(pc) else np.nan,
         penv=1013.0,
-        r34_mean=r34_mean if pd.notna(r34_mean) else None,
     )
 
     snap = {
@@ -164,11 +164,7 @@ for idx, (i, row) in enumerate(df.iterrows()):
             continue
 
         try:
-            if name == 'Chavas_clim':
-                v = chavas2015(r_grid, vmax=vmax, rmax=rmax, lat=lat,
-                               r_out=10.0 * rmax, r34_mean=None)
-            else:
-                v = PROFILES[name](**params)
+            v = PROFILES[name](**params)
 
             for rad, thresh in [('R34', 34.0), ('R50', 50.0), ('R64', 64.0)]:
                 snap[f'{name}_{rad}'] = extract_wind_radius(r_grid, v, thresh)
@@ -238,7 +234,7 @@ for name in model_names:
         summary_rows.append(row)
 
 summary = pd.DataFrame(summary_rows)
-out_summary = f'{OUTPUT_DIR}\\metrics_summary_v3.csv'
+out_summary = f'{OUTPUT_DIR}\\metrics_summary_v4.csv'
 summary.to_csv(out_summary, index=False)
 print(f"Saved {out_summary}")
 

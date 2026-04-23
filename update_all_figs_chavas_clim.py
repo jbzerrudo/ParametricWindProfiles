@@ -1,15 +1,15 @@
 """
-update_all_figs_chavas_clim.py
-Regenerate ALL figures (1-6) with 7 models including Chavas-clim.
+update_all_figs.py
+Regenerate ALL figures (1-6) with 6 models (proper CLE15, no Chavas-clim).
 
-Run this AFTER compare_profiles.py has produced metrics_by_snapshot.csv
-(which now includes Chavas_clim columns).
+Run this AFTER compare_profiles.py has produced metrics_by_snapshot.csv.
 """
 
 import pandas as pd
 import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
 import os
 matplotlib.rcParams['font.size'] = 10
 
@@ -51,13 +51,24 @@ print(f"Loaded {len(res)} snapshots.")
 
 # ── Model lists ──
 model_names  = ['Rankine', 'Holland1980', 'Holland2010', 'Willoughby2006',
-                'Emanuel2004', 'Chavas2015', 'Chavas_clim']
+                'Emanuel2004', 'Chavas2015']
 model_labels = ['Rankine', 'Holland\n1980', 'Holland\n2010', 'Willoughby\n2006',
-                'Emanuel\n2004', 'Chavas\n(obs)', 'Chavas\n(clim)']
-colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2']
+                'E04\n(hyp.)', 'Chavas\n2015']
+# Earth-tone palette: blue, orange, green, red, yellow, brown
+colors = ['#2E5C8A', '#D97A2B', '#4A7C3A', '#B23A2C', '#E0B020', '#6B4423']
+
+# Display labels for legends (Emanuel2004 flagged as hyperbolic simplification)
+legend_labels = {
+    'Rankine':        'Rankine',
+    'Holland1980':    'Holland 1980',
+    'Holland2010':    'Holland 2010',
+    'Willoughby2006': 'Willoughby 2006',
+    'Emanuel2004':    'Emanuel 2004 (hyp.)',
+    'Chavas2015':     'Chavas 2015',
+}
 
 # ═══════════════════════════════════════════════════════════════
-# Fig 1: Overall bias boxplots (7 models)
+# Fig 1: Overall bias boxplots
 # ═══════════════════════════════════════════════════════════════
 fig, axes = plt.subplots(1, 3, figsize=(16, 5), sharey=False)
 
@@ -87,28 +98,28 @@ print(f"Saved {outpath}")
 plt.close()
 
 # ═══════════════════════════════════════════════════════════════
-# Fig 2: R34 bias by intensity category (7 models)
+# Fig 2: R34 bias by intensity category
 # ═══════════════════════════════════════════════════════════════
 cats = ['TS', 'C1-2', 'C3-5']
 fig, ax = plt.subplots(figsize=(12, 5))
 
 x = np.arange(len(cats))
-width = 0.11
+width = 0.13
 for i, (name, color) in enumerate(zip(model_names, colors)):
     err_col = f'{name}_R34_ERR'
     biases = []
     for cat in cats:
         sub = res.loc[res['INTENSITY_CAT'] == cat, err_col].dropna()
         biases.append(sub.mean() if len(sub) > 5 else np.nan)
-    ax.bar(x + i * width, biases, width, label=name.replace('_', ' '), color=color, alpha=0.8)
+    ax.bar(x + i * width, biases, width, label=legend_labels[name], color=color, alpha=0.85)
 
 ax.axhline(0, color='black', lw=0.8)
-ax.set_xticks(x + width * 3)
+ax.set_xticks(x + width * 2.5)
 ax.set_xticklabels(cats)
 ax.set_xlabel('Intensity Category')
 ax.set_ylabel('R34 Bias (nm)')
 ax.set_title('R34 Bias by Intensity Category')
-ax.legend(fontsize=8, ncol=4)
+ax.legend(fontsize=9, ncol=3)
 ax.grid(True, axis='y', alpha=0.3)
 plt.tight_layout()
 outpath = os.path.join(OUTPUT_DIR, 'fig2_r34_by_intensity.png')
@@ -117,7 +128,7 @@ print(f"Saved {outpath}")
 plt.close()
 
 # ═══════════════════════════════════════════════════════════════
-# Fig 3: R34 bias by latitude band (7 models)
+# Fig 3: R34 bias by latitude band
 # ═══════════════════════════════════════════════════════════════
 bands = ['00-15N', '15-25N', '25-35N']
 fig, ax = plt.subplots(figsize=(12, 5))
@@ -129,15 +140,15 @@ for i, (name, color) in enumerate(zip(model_names, colors)):
     for band in bands:
         sub = res.loc[res['LAT_BAND'] == band, err_col].dropna()
         biases.append(sub.mean() if len(sub) > 5 else np.nan)
-    ax.bar(x + i * width, biases, width, label=name.replace('_', ' '), color=color, alpha=0.8)
+    ax.bar(x + i * width, biases, width, label=legend_labels[name], color=color, alpha=0.85)
 
 ax.axhline(0, color='black', lw=0.8)
-ax.set_xticks(x + width * 3)
+ax.set_xticks(x + width * 2.5)
 ax.set_xticklabels(bands)
 ax.set_xlabel('Latitude Band')
 ax.set_ylabel('R34 Bias (nm)')
 ax.set_title('R34 Bias by Latitude Band')
-ax.legend(fontsize=8, ncol=4)
+ax.legend(fontsize=9, ncol=3)
 ax.grid(True, axis='y', alpha=0.3)
 plt.tight_layout()
 outpath = os.path.join(OUTPUT_DIR, 'fig3_r34_by_latitude.png')
@@ -146,7 +157,7 @@ print(f"Saved {outpath}")
 plt.close()
 
 # ═══════════════════════════════════════════════════════════════
-# Fig 4: R34 bias by size class (7 models)
+# Fig 4: R34 bias by size class
 # ═══════════════════════════════════════════════════════════════
 sizes = ['compact', 'average', 'large']
 fig, ax = plt.subplots(figsize=(12, 5))
@@ -158,15 +169,15 @@ for i, (name, color) in enumerate(zip(model_names, colors)):
     for sc in sizes:
         sub = res.loc[res['SIZE_CLASS'] == sc, err_col].dropna()
         biases.append(sub.mean() if len(sub) > 5 else np.nan)
-    ax.bar(x + i * width, biases, width, label=name.replace('_', ' '), color=color, alpha=0.8)
+    ax.bar(x + i * width, biases, width, label=legend_labels[name], color=color, alpha=0.85)
 
 ax.axhline(0, color='black', lw=0.8)
-ax.set_xticks(x + width * 3)
+ax.set_xticks(x + width * 2.5)
 ax.set_xticklabels(sizes)
 ax.set_xlabel('Size Class')
 ax.set_ylabel('R34 Bias (nm)')
 ax.set_title('R34 Bias by Size Class')
-ax.legend(fontsize=8, ncol=4)
+ax.legend(fontsize=9, ncol=3)
 ax.grid(True, axis='y', alpha=0.3)
 plt.tight_layout()
 outpath = os.path.join(OUTPUT_DIR, 'fig4_r34_by_size.png')
@@ -175,9 +186,9 @@ print(f"Saved {outpath}")
 plt.close()
 
 # ═══════════════════════════════════════════════════════════════
-# Fig 5: Scatter — predicted vs observed R34 (7 panels + summary)
+# Fig 5: Scatter — predicted vs observed R34 (2x3 panels)
 # ═══════════════════════════════════════════════════════════════
-fig, axes = plt.subplots(2, 4, figsize=(18, 9))
+fig, axes = plt.subplots(2, 3, figsize=(14, 9))
 axes = axes.flatten()
 
 for idx, (name, color) in enumerate(zip(model_names, colors)):
@@ -189,16 +200,13 @@ for idx, (name, color) in enumerate(zip(model_names, colors)):
     p, o = pred[valid].values, obs[valid].values
 
     ax.scatter(o, p, s=2, alpha=0.15, color=color, rasterized=True)
-    ax.plot([0, 400], [0, 400], 'k--', lw=0.8)
-    ax.set_xlim(0, 400)
-    ax.set_ylim(0, 400)
+    ax.plot([0, 500], [0, 500], 'k--', lw=0.8)
+    ax.set_xlim(0, 500)
+    ax.set_ylim(0, 500)
     ax.set_xlabel('Observed R34 (nm)')
     ax.set_ylabel('Predicted R34 (nm)')
 
-    display_name = (name.replace('_', ' ')
-                        .replace('Chavas2015', 'Chavas (obs)')
-                        .replace('Chavas clim', 'Chavas (clim)'))
-    ax.set_title(display_name)
+    ax.set_title(legend_labels[name])
     ax.set_aspect('equal')
 
     bias = (p - o).mean()
@@ -208,28 +216,7 @@ for idx, (name, color) in enumerate(zip(model_names, colors)):
             transform=ax.transAxes, va='top', fontsize=8,
             bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
 
-# Panel 8: summary table
-ax = axes[7]
-ax.axis('off')
-ax.set_title('R34 Summary', fontsize=10)
-header = ['Model', 'Bias', 'RMSE', 'r']
-rows = []
-for name in model_names:
-    err_col = f'{name}_R34_ERR'
-    pred_col = f'{name}_R34'
-    errs = res[err_col].dropna()
-    valid = res[pred_col].notna() & res['OBS_R34'].notna()
-    corr = np.corrcoef(res.loc[valid, pred_col], res.loc[valid, 'OBS_R34'])[0, 1] if valid.sum() > 10 else np.nan
-    short = (name.replace('Holland1980', 'H80').replace('Holland2010', 'H10')
-                 .replace('Willoughby2006', 'W06').replace('Emanuel2004', 'E04')
-                 .replace('Chavas2015', 'Ch-obs').replace('Chavas_clim', 'Ch-clim'))
-    rows.append([short, f'{errs.mean():+.1f}', f'{np.sqrt((errs**2).mean()):.1f}', f'{corr:.2f}'])
-table = ax.table(cellText=rows, colLabels=header, loc='center', cellLoc='center')
-table.auto_set_font_size(False)
-table.set_fontsize(8)
-table.scale(1, 1.3)
-
-plt.suptitle('Predicted vs Observed R34 (nm)', fontsize=13)
+plt.suptitle('Predicted vs Observed R34 (nm)', fontsize=13, y=1.00)
 plt.tight_layout()
 outpath = os.path.join(OUTPUT_DIR, 'fig5_scatter_r34.png')
 plt.savefig(outpath, dpi=150, bbox_inches='tight')
@@ -237,13 +224,13 @@ print(f"Saved {outpath}")
 plt.close()
 
 # ═══════════════════════════════════════════════════════════════
-# Fig 6: RMSE summary bar chart (7 models, R34/R50/R64)
+# Fig 6: RMSE summary bar chart
 # ═══════════════════════════════════════════════════════════════
 fig, ax = plt.subplots(figsize=(12, 5))
 
 x = np.arange(len(model_names))
 width_bar = 0.25
-rad_colors = ['#4477AA', '#EE6677', '#228833']  # distinct per threshold
+rad_colors = ['#2E5C8A', '#D97A2B', '#4A7C3A']  # blue, orange, green per threshold
 
 for j, (rad, rc) in enumerate(zip(['R34', 'R50', 'R64'], rad_colors)):
     rmses = []
@@ -253,7 +240,7 @@ for j, (rad, rc) in enumerate(zip(['R34', 'R50', 'R64'], rad_colors)):
         rmses.append(np.sqrt((errs**2).mean()) if len(errs) > 0 else np.nan)
 
     ax.bar(x + j * width_bar, rmses, width_bar, label=rad,
-           color=rc, alpha=0.8, edgecolor='black', linewidth=0.5)
+           color=rc, alpha=0.85, edgecolor='black', linewidth=0.5)
 
 ax.set_xticks(x + width_bar)
 ax.set_xticklabels([m.replace('\n', ' ') for m in model_labels], rotation=15)
@@ -267,4 +254,4 @@ plt.savefig(outpath, dpi=150, bbox_inches='tight')
 print(f"Saved {outpath}")
 plt.close()
 
-print("\nAll 6 figures regenerated. Replace fig*.png files in your LaTeX folder.")
+print("\nAll 6 figures regenerated.")

@@ -1,6 +1,24 @@
 """
-wind_profiles.py
+wind_profiles.py  (v4 — proper CLE15)
+
 Six parametric tropical cyclone wind profile models.
+
+Changes from v3:
+  * `chavas2015()` now literally implements Chavas, Lin & Emanuel (2015):
+      - Inner region: ER11 Eq. (36) = CLE15 Eq. (6) — closed form
+      - Outer region: E04 Eq. (2)   = CLE15 Eq. (2) — numerical Riccati ODE
+      - Merge:        shooting on r0 for tangency (CLE15 §2b)
+      - Cd(V):        CLE15 Eq. (11), piecewise Donelan 2004
+      - Default Wcool: 2 mm/s (CLE15 Fig. 5 climatology)
+      - Default Ck/Cd: CLE15 Fig. 7 quadratic fit in Vmax
+  * REMOVED: `_chavas_outer_wind` and `_estimate_r_out_from_r34`
+    (ad-hoc closed form + fixed-point r0 solver from v3 — neither
+    corresponded to any published equation).
+  * `chavas2015()` no longer accepts `r_out` or `r34_mean` — r0 is
+    SOLVED from (Vm, rm) as prescribed in CLE15 §2b.
+  * Callers should REMOVE the `Chavas_clim` configuration from
+    compare_profiles.py — with r0 now internally solved,
+    the obs vs. clim distinction no longer exists.
 
 All functions return V(r) in knots given:
   r     : radius array (nm)
@@ -9,154 +27,131 @@ All functions return V(r) in knots given:
   pc    : central pressure (hPa) — needed for Holland models
   penv  : environmental pressure (hPa) — default 1013
   lat   : latitude (degrees N) — for Coriolis
-  
+
 References:
   [1] Rankine vortex (modified) — e.g. Holland 1980 §1
-  [2] Holland 1980, MWR 108, 1212–1218
-  [3] Holland et al. 2010, MWR 138, 4393–4401
-  [4] Willoughby et al. 2006, MWR 134, 1102–1120
-  [5] Emanuel 2004, J. Atmos. Sci. 61, 1849–1858
-  [6] Chavas et al. 2015, J. Atmos. Sci. 72, 3012–3028
+  [2] Holland 1980,            MWR 108, 1212–1218
+  [3] Holland et al. 2010,     MWR 138, 4393–4401
+  [4] Willoughby et al. 2006,  MWR 134, 1102–1120
+  [5] Emanuel 2004,            in Atmos. Turbulence & Mesoscale Meteorology
+  [6] Emanuel & Rotunno 2011,  JAS 68, 2236–2249  (ER11, inner region)
+  [7] Chavas, Lin & Emanuel 2015, JAS 72, 3647–3662  (CLE15, merged model)
 """
 
 import numpy as np
+from scipy.integrate import solve_ivp
+from scipy.optimize import brentq
 
 # ── Constants ──
-RHO = 1.15          # air density (kg/m³)
-E_EULER = np.e
-NM_TO_M = 1852.0    # 1 nautical mile in meters
-KT_TO_MS = 0.5144   # 1 knot in m/s
+RHO      = 1.15          # air density (kg/m^3)
+E_EULER  = np.e
+NM_TO_M  = 1852.0        # 1 nautical mile in meters
+KT_TO_MS = 0.5144        # 1 knot in m/s
 MS_TO_KT = 1.0 / KT_TO_MS
-OMEGA = 7.2921e-5   # Earth rotation rate (rad/s)
+OMEGA    = 7.2921e-5     # Earth rotation rate (rad/s)
 
 
 def coriolis(lat):
-    """Coriolis parameter f (s⁻¹) at given latitude."""
-    return 2 * OMEGA * np.sin(np.radians(np.abs(lat)))
+    """Coriolis parameter f (s^-1) at given latitude."""
+    return 2.0 * OMEGA * np.sin(np.radians(np.abs(lat)))
 
 
-# ═══════════════════════════════════════════════════════════════════
+# ===============================================================
 # 1. Modified Rankine Vortex
-# ═══════════════════════════════════════════════════════════════════
+# ===============================================================
 def rankine(r, vmax, rmax, alpha=0.5, **kwargs):
     """
     Modified Rankine vortex.
     V(r) = Vmax * (r/Rmax)         for r <= Rmax
     V(r) = Vmax * (Rmax/r)^alpha   for r >  Rmax
-    
-    alpha = 0.5 is typical; 0.4-0.6 range.
     """
     r = np.asarray(r, dtype=float)
     v = np.where(
         r <= rmax,
         vmax * (r / rmax),
-        vmax * (rmax / r) ** alpha
+        vmax * (rmax / r) ** alpha,
     )
     v[r == 0] = 0.0
     return v
 
 
-# ═══════════════════════════════════════════════════════════════════
+# ===============================================================
 # 2. Holland 1980
-# ═══════════════════════════════════════════════════════════════════
+# ===============================================================
 def holland1980(r, vmax, rmax, pc, lat, penv=1013.0, **kwargs):
     """
     Holland (1980) gradient wind profile.
-    
+
     B is diagnosed from Vmax and pressure deficit:
-      B = (Vmax_ms)^2 * rho * e / (penv - pc) / 100
-    
-    Gradient wind (then reduced to surface via 0.8 factor already
-    implicit if Vmax is surface wind — here we assume inputs are
-    surface-level, so no reduction applied).
-    
-    V(r) = sqrt( B/rho * (Rmax/r)^B * dp*100 * exp(-(Rmax/r)^B)
+      B = (Vmax_ms)^2 * rho * e / (penv - pc)
+
+    V(r) = sqrt( B/rho * (Rmax/r)^B * dp * exp(-(Rmax/r)^B)
                  + (r_m*f/2)^2 ) - r_m*f/2
-    
-    where dp = penv - pc (hPa), and distances in meters.
     """
     r = np.asarray(r, dtype=float)
     f = coriolis(lat)
-    dp = (penv - pc) * 100.0  # Pa
-    
+    dp = (penv - pc) * 100.0  # hPa -> Pa
+
     if dp <= 0:
         return np.zeros_like(r)
-    
+
     vmax_ms = vmax * KT_TO_MS
-    
-    # Diagnose B from Vmax (Holland 1980 eq. 8 rearranged)
     B = (vmax_ms ** 2 * RHO * E_EULER) / dp
-    B = np.clip(B, 1.0, 2.5)  # physical bounds
-    
+    B = np.clip(B, 1.0, 2.5)
+
     rmax_m = rmax * NM_TO_M
-    r_m = r * NM_TO_M
-    r_m = np.maximum(r_m, 1.0)  # avoid division by zero
-    
+    r_m = np.maximum(r * NM_TO_M, 1.0)
     rr = (rmax_m / r_m) ** B
-    
+
     v_ms = np.sqrt(
         (B / RHO) * rr * dp * np.exp(-rr) + (r_m * f / 2) ** 2
     ) - r_m * f / 2
-    
+
     v_ms = np.maximum(v_ms, 0.0)
     return v_ms * MS_TO_KT
 
 
-# ═══════════════════════════════════════════════════════════════════
-# 3. Holland et al. 2010
-# ═══════════════════════════════════════════════════════════════════
+# ===============================================================
+# 3. Holland et al. 2010 (simplified: fixed x=0.5, no vt/dPdt)
+# ===============================================================
 def holland2010(r, vmax, rmax, pc, lat, penv=1013.0, **kwargs):
     """
     Holland et al. (2010) revised wind profile.
 
-    Peakedness parameter bs from H10 Eq. 8 (Δp in hPa):
-      bs = -4.4e-5 * Δp^2 + 0.01*Δp + 0.03*dP/dt
-           - 0.014*|lat| + 0.15*vt^x + 1.0
+    Simplified here (translation speed and pressure-tendency terms
+    omitted; outer exponent x held at 0.5). This is the H1980 radial
+    form with an H2010-style intensity/latitude-dependent peakedness
+    bs, NOT the full H2010 profile.
 
-    Simplified here (translation speed and pressure tendency omitted,
-    as they are unavailable across all snapshots):
-      bs = -4.4e-5 * Δp^2 + 0.01*Δp - 0.014*|lat| + 1.0
-
-    Wind profile (H10 Eq. 6):
-      Vs(r) = Vmax * [ (Rmax/r)^bs * exp(1 - (Rmax/r)^bs) ]^0.5
-
-    NOTE: this revision now requires pc. NaN pc => NaN profile.
+      bs = -4.4e-5*dp^2 + 0.01*dp - 0.014*|lat| + 1.0
+      V(r) = Vmax * [ (Rmax/r)^bs * exp(1 - (Rmax/r)^bs) ]^0.5
     """
     r = np.asarray(r, dtype=float)
-
-    # Pressure deficit (hPa)
     dp = penv - pc
     if not np.isfinite(dp) or dp <= 0:
         return np.full_like(r, np.nan)
 
-    # Peakedness parameter (H10 Eq. 8, Δp-based)
     bs = -4.4e-5 * dp**2 + 0.01 * dp - 0.014 * abs(lat) + 1.0
     bs = np.clip(bs, 0.5, 2.5)
 
-    rr = rmax / np.maximum(r, 0.01)  # Rmax/r
-
+    rr = rmax / np.maximum(r, 0.01)
     v_frac = (rr ** bs * np.exp(1.0 - rr ** bs)) ** 0.5
     v = vmax * v_frac
     v[r == 0] = 0.0
     return v
 
 
-# ═══════════════════════════════════════════════════════════════════
+# ===============================================================
 # 4. Willoughby et al. 2006
-# ═══════════════════════════════════════════════════════════════════
+# ===============================================================
 def _bellramp(xi):
-    """Fourth-order ramp w(xi), W06 Eq. (A2d). Degree-9 polynomial."""
+    """Degree-9 polynomial ramp from W06 Eq. (A2d)."""
     xi = np.clip(xi, 0.0, 1.0)
     return 126*xi**5 - 420*xi**6 + 540*xi**7 - 315*xi**8 + 70*xi**9
 
 
 def _find_R1(rmax_km, X_eff, n, transition_width_km=25.0):
-    """
-    Locate R1 (inner edge of transition zone) so that dV/dr = 0 at Rmax.
-    From W06 Eq. (3):  w((Rmax-R1)/(R2-R1)) = n*X_eff / (n*X_eff + Rmax)
-    where X_eff = (1-A)*X1 + A*X2 for dual-exponential.
-    Solved by bisection on the bellramp inverse.
-    """
+    """Bisection for R1 so dV/dr=0 at Rmax. W06 Eq. (3)."""
     w_target = n * X_eff / (n * X_eff + rmax_km)
     xi_lo, xi_hi = 0.0, 1.0
     for _ in range(60):
@@ -172,257 +167,385 @@ def _find_R1(rmax_km, X_eff, n, transition_width_km=25.0):
 def willoughby2006(r, vmax, rmax, lat, **kwargs):
     """
     Willoughby, Darling & Rahn (2006) piecewise-continuous profile.
+    Three regions joined by a degree-9 bellramp.
 
-    Three regions joined by a degree-9 bellramp:
-      r <= R1:        V = Vmax * (r/Rmax)^n          (inner power law)
-      R1 < r <= R2:   smooth polynomial transition   (bellramp blend)
-      r > R2:         dual-exponential outer decay    (W06 Eq. 4)
-
-    Empirical relations from W06 Eqs. (10a)-(10c):
+    W06 Eqs. (10a)-(10c) — Vmax in m/s (knots converted internally),
+    lat in degrees:
       n  = 0.4067 + 0.0144*Vmax_ms - 0.0038*|lat|
-      X1 = 317.1  - 2.026*Vmax_ms  + 1.915*|lat|   (km, slow decay)
-      A  = 0.0696 + 0.0049*Vmax_ms  - 0.0064*|lat|  (A >= 0)
-      X2 = 25 km                                      (fast decay, fixed)
-
-    Outer profile (W06 Eq. 4):
-      Vo = Vmax * [(1-A)*exp(-(r-Rmax)/X1) + A*exp(-(r-Rmax)/X2)]
+      X1 = 317.1  - 2.026*Vmax_ms  + 1.915*|lat|   (km)
+      A  = 0.0696 + 0.0049*Vmax_ms - 0.0064*|lat|
+      X2 = 25 km (fixed)
     """
     r = np.asarray(r, dtype=float)
     vmax_ms = vmax * KT_TO_MS
     lat_abs = abs(lat)
 
-    # ── Empirical parameters — W06 Eqs. (10a)-(10c) ──
     n = 0.4067 + 0.0144 * vmax_ms - 0.0038 * lat_abs
     n = np.clip(n, 0.2, 2.4)
+    X1_km = max(317.1 - 2.026 * vmax_ms + 1.915 * lat_abs, 50.0)
+    X2_km = 25.0
+    A = np.clip(0.0696 + 0.0049 * vmax_ms - 0.0064 * lat_abs, 0.0, 1.0)
 
-    X1_km = 317.1 - 2.026 * vmax_ms + 1.915 * lat_abs
-    X1_km = max(X1_km, 50.0)
-
-    X2_km = 25.0          # fixed fast decay length (W06 §4)
-
-    A = 0.0696 + 0.0049 * vmax_ms - 0.0064 * lat_abs
-    A = np.clip(A, 0.0, 1.0)
-
-    # ── Convert to km ──
     rmax_km = rmax * NM_TO_M / 1000.0
     r_km    = r    * NM_TO_M / 1000.0
 
-    # ── Transition zone (25 km width for dual-exponential, W06 §4) ──
     tw_km  = 25.0
     X_eff  = (1.0 - A) * X1_km + A * X2_km
     R1_km  = _find_R1(rmax_km, X_eff, n, tw_km)
     R2_km  = R1_km + tw_km
 
-    # ── Inner profile: power law ──
     r_safe = np.maximum(r_km, 1e-6)
     v_inner = vmax * (r_safe / rmax_km) ** n
 
-    # ── Outer profile: dual-exponential (W06 Eq. 4) ──
     dr = r_km - rmax_km
     v_outer = vmax * (
         (1.0 - A) * np.exp(-dr / X1_km) +
-        A          * np.exp(-dr / X2_km)
+        A         * np.exp(-dr / X2_km)
     )
 
-    # ── Bellramp blend in transition zone ──
     xi = np.where(tw_km > 0, (r_km - R1_km) / tw_km, 0.0)
     xi = np.clip(xi, 0.0, 1.0)
     w  = _bellramp(xi)
     v_trans = v_inner * (1.0 - w) + v_outer * w
 
-    # ── Assemble ──
     v = np.where(r_km <= R1_km, v_inner,
         np.where(r_km <= R2_km, v_trans, v_outer))
-
     v[r == 0] = 0.0
     return np.maximum(v, 0.0)
 
 
-# ═══════════════════════════════════════════════════════════════════
-# 5. Emanuel 2004
-# ═══════════════════════════════════════════════════════════════════
-def emanuel2004(r, vmax, rmax, lat, r_out=300.0, **kwargs):
+# ===============================================================
+# 5. Emanuel 2004 (simplified hyperbolic form)
+# ===============================================================
+def emanuel2004(r, vmax, rmax, lat, **kwargs):
     """
-    Emanuel (2004) angular-momentum-based profile.
-    
-    Inside Rmax: solid body rotation 
-      V(r) = Vmax * (r / Rmax)
-    
-    Outside Rmax: conservation of angular momentum modified by
-    surface drag, following E04 eq. (5):
-      V(r) = Vmax * sqrt( 2*Rmax*r / (Rmax^2 + r^2) )
-    
-    This gives a physically-motivated outer wind decay that is
-    slower than Rankine but faster than Holland at large radii.
-    
-    Note: This is the simplified "hyperbolic" profile from E04
-    that does not require potential intensity or thermodynamic input.
+    Simplified hyperbolic outer wind (not the full E04 radiative-
+    subsidence model, which requires thermodynamic inputs absent
+    from best-track data):
+        V(r) = Vmax * sqrt( 2*Rmax*r / (Rmax^2 + r^2) ),   r > Rmax
+    Solid-body rotation inside Rmax. Asymptotic decay at large r
+    is r^(-1/2) — same rate as Rankine(alpha=0.5), but with a
+    sqrt(2) larger prefactor.
     """
     r = np.asarray(r, dtype=float)
-    
-    # Inner: solid body
     v_inner = vmax * (r / rmax)
-    
-    # Outer: E04 hyperbolic profile
     v_outer = vmax * np.sqrt(2.0 * rmax * r / (rmax**2 + r**2))
-    
     v = np.where(r <= rmax, v_inner, v_outer)
     v[r == 0] = 0.0
     return v
 
 
-# ═══════════════════════════════════════════════════════════════════
-# 6. Chavas et al. 2015
-# ═══════════════════════════════════════════════════════════════════
-def _chavas_outer_wind(r_m, r_out_m, f, Ck_Cd=1.0):
-    """
-    Chavas & Lin (2013) outer wind model (m/s).
-    V_outer(r) = f*r_out/2 * sqrt( (r_out/r)^(2*Ck_Cd/(1+Ck_Cd)) - 1 )
-    
-    Following CLE15 eq. (4): the exponent on (r0/r) is 2*Ck/Cd / (1 + Ck/Cd).
-    For Ck/Cd = 1 this gives exponent = 1.
-    """
-    exponent = 2.0 * Ck_Cd / (1.0 + Ck_Cd)
-    ratio = np.maximum(r_out_m / r_m, 1.0) ** exponent
-    return (f * r_out_m / 2.0) * np.sqrt(np.maximum(ratio - 1.0, 0.0))
+# ===============================================================
+# 6. Chavas, Lin & Emanuel (2015) — proper implementation
+# ===============================================================
+#
+#   Inner region (r <= ra) : ER11 Eq. (36) / CLE15 Eq. (6).
+#   Outer region (ra < r < r0) : E04 Eq. (2) / CLE15 Eq. (2),
+#       integrated numerically (Riccati ODE, no closed form).
+#   Merge (ra, Va) found by shooting on r0: enforce continuity
+#       of M AND dM/dr at the crossing of the two curves.
+#   Drag Cd(V) : CLE15 Eq. (11), piecewise Donelan 2004 fit.
+#   Default Wcool = 2 mm/s (CLE15 Sec. 5b, Fig. 5 climatology).
+#   Default Ck/Cd = CLE15 Fig. 7 quadratic fit in Vmax (m/s).
+# ===============================================================
+
+def _cd_donelan_scalar(V_ms):
+    """CLE15 Eq. (11). Scalar form for use inside ODE rhs."""
+    if V_ms <= 6.0:
+        return 6.16e-4
+    if V_ms >= 35.4:
+        return 2.4e-3
+    return 5.91e-5 * V_ms + 2.614e-4
 
 
-def _estimate_r_out_from_r34(r34_nm, vmax, rmax, lat, Ck_Cd=1.0):
-    """
-    Invert the Chavas-Lin outer wind equation to find r_out such that
-    V_outer(R34) = 34 kt.  Solved analytically:
-    
-    34 kt -> v34_ms
-    v34_ms = f*r0/2 * sqrt( (r0/r34)^exp - 1 )
-    => (r0/r34)^exp = 1 + (2*v34/f/r0)^2
-    
-    Since r0 appears on both sides, solve iteratively.
-    Falls back to 10*Rmax if no convergence or bad inputs.
-    """
-    f = coriolis(lat)
-    if f < 1e-7:
-        f = 1e-7  # near-equator safety
-    
-    v34_ms = 34.0 * KT_TO_MS
-    r34_m = r34_nm * NM_TO_M
-    exponent = 2.0 * Ck_Cd / (1.0 + Ck_Cd)
-    
-    # Initial guess: r_out ~ 2.5 * R34
-    r0 = 2.5 * r34_m
-    
-    for _ in range(50):
-        lhs = 1.0 + (2.0 * v34_ms / (f * r0)) ** 2
-        r0_new = r34_m * lhs ** (1.0 / exponent)
-        if abs(r0_new - r0) < 100.0:  # converge within 100 m
-            return r0_new / NM_TO_M
-        r0 = 0.5 * (r0 + r0_new)  # damped update
-    
-    # Fallback
-    return 10.0 * rmax
+def _ck_cd_fit(vmax_ms):
+    """CLE15 Fig. 7 quadratic fit (Vmax in m/s)."""
+    return 0.00055 * vmax_ms**2 - 0.0259 * vmax_ms + 0.763
 
 
-def chavas2015(r, vmax, rmax, lat, r_out=None, r34_mean=None, **kwargs):
+def _er11_M(r_m, rm_m, vmax_ms, f, Ck_Cd):
     """
-    Chavas, Lin & Emanuel (2015) merged profile.
-    
-    Inner region (r <= Rmax): E04 profile (solid body core + hyperbolic)
-    Outer region (r > Rmax): Chavas & Lin (2013) boundary-layer model
-    Merge at Rmax with continuity enforced by scaling the outer branch.
-    
-    r_out is estimated from observed mean R34 by inverting the CL13
-    outer wind equation. Falls back to 10*Rmax if R34 not available.
-    
-    Ck/Cd = 1.0 (ratio of exchange coefficients).
+    ER11 Eq. (36) = CLE15 Eq. (6).
+
+        (M/Mm)^(2-alpha) = 2*(r/rm)^2 / [(2-alpha) + alpha*(r/rm)^2]
+
+    alpha = Ck/Cd; Mm = rm*Vm + 0.5*f*rm^2.
+    """
+    Mm      = rm_m * vmax_ms + 0.5 * f * rm_m**2
+    rhat_sq = (r_m / rm_m)**2
+    alpha   = Ck_Cd
+    base    = 2.0 * rhat_sq / ((2.0 - alpha) + alpha * rhat_sq)
+    return Mm * np.power(np.maximum(base, 0.0), 1.0 / (2.0 - alpha))
+
+
+def _er11_dMdr(r_m, rm_m, vmax_ms, f, Ck_Cd):
+    """
+    Analytical derivative of ER11 Eq. (36):
+
+        dM/dr = 4*Mm*r / (rm^2 * D^2) * base^((1-alpha)/(2-alpha))
+
+    where D = (2-alpha) + alpha*(r/rm)^2 and
+          base = 2*(r/rm)^2 / D.
+    """
+    Mm      = rm_m * vmax_ms + 0.5 * f * rm_m**2
+    rhat_sq = (r_m / rm_m)**2
+    alpha   = Ck_Cd
+    D       = (2.0 - alpha) + alpha * rhat_sq
+    base    = 2.0 * rhat_sq / D
+    return (4.0 * Mm * r_m / rm_m**2) / D**2 * \
+           np.power(np.maximum(base, 1e-30),
+                    (1.0 - alpha) / (2.0 - alpha))
+
+
+def _e04_rhs(r, M, r0_m, f, Wcool, chi_const):
+    """
+    E04 Eq. (2) = CLE15 Eq. (2).
+
+        dM/dr = chi * (r*V)^2 / (r0^2 - r^2)
+        V     = M/r - f*r/2
+        chi   = 2*Cd/Wcool  (V-dependent Cd)  OR  a constant
+    """
+    M_scalar = float(M[0])
+    V = M_scalar / r - 0.5 * f * r
+    if V < 0.0:
+        V = 0.0
+    denom = r0_m**2 - r**2
+    if denom <= 0.0:
+        return [0.0]
+    if chi_const is not None:
+        chi = chi_const
+    else:
+        chi = 2.0 * _cd_donelan_scalar(V) / Wcool
+    return [chi * (r * V)**2 / denom]
+
+
+def _integrate_e04(r0_m, f, Wcool, r_min_m, chi_const=None):
+    """Integrate E04 ODE from r0 (V=0) inward to r_min."""
+    r_start = r0_m * (1.0 - 1e-6)
+    M_start = 0.5 * f * r_start**2
+    sol = solve_ivp(
+        lambda r, M: _e04_rhs(r, M, r0_m, f, Wcool, chi_const),
+        t_span=(r_start, r_min_m),
+        y0=[M_start],
+        method='RK45',
+        rtol=1e-6,
+        atol=10.0,
+        dense_output=True,
+        max_step=(r_start - r_min_m) / 50.0,
+    )
+    return sol
+
+
+def _find_merge_at_r0(r0_m, rm_m, vmax_ms, f, Ck_Cd, Wcool, chi_const,
+                      sol=None):
+    """
+    For given r0, locate the radius ra that minimises M_outer - M_inner.
+    At the correct (tangent) r0 this minimum is exactly zero.
+    Returns (ra, Ma, sol). (None, None, sol) if r_grid empty.
+    """
+    r_min = rm_m * 1.001
+    if sol is None:
+        sol = _integrate_e04(r0_m, f, Wcool, r_min, chi_const)
+    # Dense log-spaced grid across the integration range
+    r_grid = np.geomspace(r_min, r0_m * (1.0 - 1e-6), 1000)
+    M_out  = sol.sol(r_grid)[0]
+    M_in   = _er11_M(r_grid, rm_m, vmax_ms, f, Ck_Cd)
+    delta  = M_out - M_in
+    # Interior minimum (exclude endpoints where curves may coincide
+    # trivially or be poorly defined)
+    interior = slice(5, -5)
+    i_loc = int(np.argmin(delta[interior])) + 5
+    ra = float(r_grid[i_loc])
+    Ma = float(sol.sol(ra)[0])
+    return ra, Ma, sol
+
+
+def _min_delta(r0_m, rm_m, vmax_ms, f, Ck_Cd, Wcool, chi_const):
+    """
+    Tangency residual: min_r (M_outer - M_inner).
+    Sign convention:
+      < 0  =>  outer curve dips below inner somewhere  =>  r0 too small
+      = 0  =>  curves tangent                          =>  correct r0
+      > 0  =>  outer curve always above inner          =>  r0 too large
+    """
+    r_min = rm_m * 1.001
+    sol = _integrate_e04(r0_m, f, Wcool, r_min, chi_const)
+    r_grid = np.geomspace(r_min, r0_m * (1.0 - 1e-6), 1000)
+    M_out  = sol.sol(r_grid)[0]
+    M_in   = _er11_M(r_grid, rm_m, vmax_ms, f, Ck_Cd)
+    delta  = M_out - M_in
+    interior = slice(5, -5)
+    return float(np.min(delta[interior]))
+
+
+def _solve_r0(rm_m, vmax_ms, f, Ck_Cd, Wcool, chi_const=None):
+    """
+    Shoot on r0 via Brent's method to achieve ER11/E04 tangency,
+    i.e. min_r (M_outer - M_inner) = 0.
+    """
+    def g(r0):
+        return _min_delta(r0, rm_m, vmax_ms, f,
+                          Ck_Cd, Wcool, chi_const)
+
+    lo, hi = rm_m * 3.0, rm_m * 50.0
+    try:
+        g_lo = g(lo)
+        g_hi = g(hi)
+        # Expand upper bound if bracket not yet found
+        tries = 0
+        while g_lo * g_hi > 0 and tries < 6:
+            hi *= 2.0
+            g_hi = g(hi)
+            tries += 1
+        if g_lo * g_hi > 0:
+            return None
+        return brentq(g, lo, hi, rtol=1e-4, maxiter=60)
+    except (ValueError, RuntimeError):
+        return None
+
+
+def chavas2015(r, vmax, rmax, lat, Ck_Cd=None, Wcool=2e-3,
+               chi_const=None, **kwargs):
+    """
+    Chavas, Lin & Emanuel (2015) merged profile, implemented per
+    CLE15 Sec. 2.
+
+    Inputs:
+      r         : radial grid (nm)
+      vmax      : max sustained wind (kt)
+      rmax      : radius of max wind (nm)
+      lat       : latitude (deg)
+      Ck_Cd     : ratio of exchange coefficients; if None, uses CLE15
+                  Fig. 7 quadratic fit in Vmax (m/s), clipped to [0.1, 2.0]
+      Wcool     : radiative-subsidence rate (m/s); default 2e-3 (2 mm/s)
+      chi_const : if given, overrides chi = 2*Cd/Wcool with this constant;
+                  used for reproducing CLE15 Fig. 2 (chi_const=1)
+
+    Algorithm:
+      1. Compute ER11 Eq. (36) inner region from (Vm, rm, f, Ck/Cd).
+      2. Shoot on r0: integrate E04 Eq. (2) inward until the two
+         curves are tangent at some ra (CLE15 Sec. 2b).
+      3. Merge: ER11 for r <= ra, E04 for ra < r < r0, zero for r >= r0.
+
+    Returns:
+      V(r) in knots. NaN everywhere on convergence failure.
     """
     r = np.asarray(r, dtype=float)
     f = coriolis(lat)
     if f < 1e-7:
-        f = 1e-7
-    
-    Ck_Cd = 1.0
-    
-    # Estimate r_out from R34 if available
-    if r_out is None:
-        if r34_mean is not None and r34_mean > 0:
-            r_out = _estimate_r_out_from_r34(r34_mean, vmax, rmax, lat, Ck_Cd)
-        else:
-            r_out = 10.0 * rmax
-    
-    r_out_m = r_out * NM_TO_M
-    rmax_m = rmax * NM_TO_M
-    r_m = np.maximum(r * NM_TO_M, 1.0)
-    
-    # Inner: solid body for r <= Rmax
-    v_inner = vmax * (r / rmax)
-    
-    # Outer: Chavas-Lin model
-    v_outer_ms = _chavas_outer_wind(r_m, r_out_m, f, Ck_Cd)
-    v_outer = v_outer_ms * MS_TO_KT
-    
-    # Scale outer to match Vmax at Rmax (continuity)
-    v_outer_at_rmax_ms = _chavas_outer_wind(
-        np.array([rmax_m]), r_out_m, f, Ck_Cd
-    )[0]
-    v_outer_at_rmax = v_outer_at_rmax_ms * MS_TO_KT
-    
-    if v_outer_at_rmax > 0:
-        scale = vmax / v_outer_at_rmax
-    else:
-        scale = 1.0
-    v_outer_scaled = v_outer * scale
-    
-    # Assemble
-    v = np.where(r <= rmax, v_inner, v_outer_scaled)
-    v[r == 0] = 0.0
-    v = np.maximum(v, 0.0)
-    return v
+        f = 1e-7  # near-equator safety
+
+    vmax_ms = vmax * KT_TO_MS
+    rmax_m  = rmax * NM_TO_M
+    r_m     = r    * NM_TO_M
+
+    if Ck_Cd is None:
+        Ck_Cd = float(np.clip(_ck_cd_fit(vmax_ms), 0.1, 2.0))
+
+    # 1. Solve for r0
+    r0_m = _solve_r0(rmax_m, vmax_ms, f, Ck_Cd, Wcool, chi_const)
+    if r0_m is None:
+        return np.full_like(r, np.nan)
+
+    # 2. Get merge point and outer-region solution
+    ra_m, Ma, sol_outer = _find_merge_at_r0(
+        r0_m, rmax_m, vmax_ms, f, Ck_Cd, Wcool, chi_const
+    )
+    if ra_m is None:
+        return np.full_like(r, np.nan)
+
+    # 3. Assemble V(r)
+    v_ms = np.zeros_like(r_m)
+
+    # Inner: ER11 (0 < r <= ra)
+    m_inner = (r_m > 0.0) & (r_m <= ra_m)
+    if m_inner.any():
+        M_in = _er11_M(r_m[m_inner], rmax_m, vmax_ms, f, Ck_Cd)
+        V_in = M_in / r_m[m_inner] - 0.5 * f * r_m[m_inner]
+        v_ms[m_inner] = np.maximum(V_in, 0.0)
+
+    # Outer: E04 (ra < r < r0)
+    m_outer = (r_m > ra_m) & (r_m < r0_m)
+    if m_outer.any():
+        M_out = sol_outer.sol(r_m[m_outer])[0]
+        V_out = M_out / r_m[m_outer] - 0.5 * f * r_m[m_outer]
+        v_ms[m_outer] = np.maximum(V_out, 0.0)
+
+    # r >= r0: zero (already initialised)
+    return v_ms * MS_TO_KT
 
 
-# ═══════════════════════════════════════════════════════════════════
+# ===============================================================
 # Registry
-# ═══════════════════════════════════════════════════════════════════
+# ===============================================================
 PROFILES = {
-    'Rankine':      rankine,
-    'Holland1980':  holland1980,
-    'Holland2010':  holland2010,
+    'Rankine':        rankine,
+    'Holland1980':    holland1980,
+    'Holland2010':    holland2010,
     'Willoughby2006': willoughby2006,
-    'Emanuel2004':  emanuel2004,
-    'Chavas2015':   chavas2015,
+    'Emanuel2004':    emanuel2004,
+    'Chavas2015':     chavas2015,
 }
 
-# Required input fields for each model
 REQUIRED = {
     'Rankine':        ['vmax', 'rmax'],
     'Holland1980':    ['vmax', 'rmax', 'pc', 'lat'],
     'Holland2010':    ['vmax', 'rmax', 'pc', 'lat'],
     'Willoughby2006': ['vmax', 'rmax', 'lat'],
-    'Emanuel2004':    ['vmax', 'rmax', 'lat'],
-    'Chavas2015':     ['vmax', 'rmax', 'lat', 'r34_mean'],
+    'Emanuel2004':    ['vmax', 'rmax'],
+    'Chavas2015':     ['vmax', 'rmax', 'lat'],   # r0 is SOLVED, not input
 }
 
 
-# ═══════════════════════════════════════════════════════════════════
-# Quick sanity plot
-# ═══════════════════════════════════════════════════════════════════
+# ===============================================================
+# Self-test: reproduce CLE15 Fig. 2
+# ===============================================================
 if __name__ == '__main__':
-    import matplotlib.pyplot as plt
-    
-    # Typical WNP typhoon
-    r = np.linspace(0, 300, 601)  # 0-300 nm
-    params = dict(vmax=100, rmax=20, pc=940, lat=18.0, penv=1013.0, r34_mean=120)
-    
+    # CLE15 Fig. 2: (rm, Vm) = (30 km, 50 m/s), Ck/Cd = 1, chi = 1.
+    # Expected: r0 ~ 847 km, merge at (ra, Va) ~ (79.1 km, 31.7 m/s).
+    rm_km = 30.0
+    Vm_ms = 50.0
+    lat   = 20.0
+    f_val = coriolis(lat)
+
+    r0_m = _solve_r0(rm_km * 1000.0, Vm_ms, f_val,
+                     Ck_Cd=1.0, Wcool=2e-3, chi_const=1.0)
+    ra_m, Ma, _ = _find_merge_at_r0(
+        r0_m, rm_km * 1000.0, Vm_ms, f_val,
+        Ck_Cd=1.0, Wcool=2e-3, chi_const=1.0,
+    )
+    Va_ms = Ma / ra_m - 0.5 * f_val * ra_m
+
+    print("CLE15 Fig. 2 self-test")
+    print(f"  r0 = {r0_m/1000:7.1f} km   (expected ~847)")
+    print(f"  ra = {ra_m/1000:7.1f} km   (expected ~79.1)")
+    print(f"  Va = {Va_ms:7.2f} m/s  (expected ~31.7)")
+
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError:
+        raise SystemExit(0)
+
+    r_nm = np.linspace(0.0, 300.0, 601)
+    params = dict(vmax=100.0, rmax=20.0, pc=940.0, lat=18.0, penv=1013.0)
+
     fig, ax = plt.subplots(figsize=(10, 6))
     for name, func in PROFILES.items():
-        v = func(r, **params)
-        ax.plot(r, v, label=name, linewidth=1.5)
-    
+        if name == 'Chavas2015':
+            v = func(r_nm, vmax=params['vmax'], rmax=params['rmax'],
+                     lat=params['lat'])
+        else:
+            v = func(r_nm, **params)
+        ax.plot(r_nm, v, label=name, linewidth=1.5)
+
     ax.axhline(34, color='gray', ls='--', lw=0.8, label='34 kt (TS)')
-    ax.axhline(64, color='gray', ls=':', lw=0.8, label='64 kt (TY)')
+    ax.axhline(64, color='gray', ls=':',  lw=0.8, label='64 kt (TY)')
     ax.axvline(params['rmax'], color='black', ls=':', lw=0.8, alpha=0.5)
     ax.set_xlabel('Radius (nm)')
     ax.set_ylabel('Wind speed (kt)')
-    ax.set_title(f"Parametric profiles: Vmax={params['vmax']} kt, Rmax={params['rmax']} nm, "
-                 f"Pc={params['pc']} hPa, Lat={params['lat']}°N")
+    ax.set_title(f"Parametric profiles: Vmax={params['vmax']} kt, "
+                 f"Rmax={params['rmax']} nm, Pc={params['pc']} hPa, "
+                 f"Lat={params['lat']} deg N")
     ax.legend(fontsize=9)
     ax.set_xlim(0, 300)
     ax.set_ylim(0, 120)
