@@ -1,0 +1,24 @@
+{
+  "title": "ParametricWindProfiles: analysis code and processed data for a comparison of parametric TC wind profiles in the western North Pacific",
+  "description": "Python code and processed JTWC/IBTrACS best-track derivatives that reproduce all tables and figures in Zerrudo & Bala (2026), 'A Comparison of Parametric Tropical Cyclone Wind Profiles for the Western North Pacific' (Tropical Cyclone Research and Review). Includes the wind-profile library, five analysis scripts, the pre-generated Tao (2026) predictions, and a full set of reference outputs.",
+  "upload_type": "software",
+  "access_right": "open",
+  "license": "MIT",
+  "creators": [
+    {
+      "name": "Zerrudo, Jeferson B.",
+      "affiliation": "DOST-PAGASA, Quezon City, Philippines"
+    },
+    {
+      "name": "Bala, Michael S.",
+      "affiliation": "DOST-PAGASA, Quezon City, Philippines"
+    }
+  ],
+  "keywords": [
+    "tropical cyclone",
+    "parametric wind profile",
+    "western North Pacific",
+    "wind structure",
+    "model comparison"
+  ]
+}

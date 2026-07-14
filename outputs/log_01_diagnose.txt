@@ -1,0 +1,20 @@
+BASIN composition:
+BASIN
+WP    18147
+EP      522
+NI      103
+
+non-WP fixes: 625 across 18 storms
+LON range in catalog: 80.0 .. 253.6 degE
+
+== R34 ==
+  ALL      n= 18772  best=Willoughby2006 (RMSE 37.7)  Willoughby RMSE=37.7 bias=-2.8
+  WP-only  n= 18147  best=Willoughby2006 (RMSE 37.3)  Willoughby RMSE=37.3 bias=-3.8
+
+== R50 ==
+  ALL      n= 18772  best=Willoughby2006 (RMSE 24.5)  Willoughby RMSE=24.5 bias=+6.0
+  WP-only  n= 18147  best=Willoughby2006 (RMSE 24.2)  Willoughby RMSE=24.2 bias=+5.4
+
+== R64 ==
+  ALL      n= 18772  best=Willoughby2006 (RMSE 17.6)  Willoughby RMSE=17.6 bias=+9.1
+  WP-only  n= 18147  best=Willoughby2006 (RMSE 17.3)  Willoughby RMSE=17.3 bias=+8.7

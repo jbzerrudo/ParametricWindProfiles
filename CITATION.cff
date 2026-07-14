@@ -1,0 +1,25 @@
+cff-version: 1.2.0
+message: "If you use this software or the processed data, please cite both the paper and this archive."
+title: "ParametricWindProfiles: analysis code and processed data for a comparison of parametric TC wind profiles in the western North Pacific"
+abstract: "Python code and processed JTWC/IBTrACS best-track derivatives that reproduce all tables and figures comparing seven parametric tropical cyclone wind profile models over the western North Pacific."
+type: software
+authors:
+  - family-names: Zerrudo
+    given-names: "Jeferson B."
+    affiliation: "DOST-PAGASA, Quezon City, Philippines"
+    # orcid: "https://orcid.org/0000-0000-0000-0000"   # <-- add if available
+  - family-names: Bala
+    given-names: "Michael S."
+    affiliation: "DOST-PAGASA, Quezon City, Philippines"
+    # orcid: "https://orcid.org/0000-0000-0000-0000"   # <-- add if available
+version: "1.0.0"
+date-released: "2026-07-14"
+license: MIT
+repository-code: "https://github.com/jbzerrudo/ParametricWindProfiles"
+doi: "10.5281/zenodo.XXXXXXX"   # <-- replace with the reserved Zenodo DOI
+keywords:
+  - tropical cyclone
+  - parametric wind profile
+  - western North Pacific
+  - wind structure
+  - model comparison

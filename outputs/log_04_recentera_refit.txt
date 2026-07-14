@@ -1,0 +1,21 @@
+=== Recent-era RMSE by period (WNP) (Tao R34 = inferred size input, flagged) ===
+-- R34 --
+  2001-2024: best=Willoughby2006 (37.3) | Willough=37.3 Holland1=48.9 Chavas20=52.6 Tao2026=53.3 Rankine=64.1 Holland2=127.8 Emanuel2=140.1
+  2016-2024: best=Willoughby2006 (45.8) | Willough=45.8 Holland1=51.0 Chavas20=53.0 Rankine=59.4 Tao2026=59.6 Holland2=121.5 Emanuel2=122.1
+  2020-2024: best=Willoughby2006 (41.5) | Willough=41.5 Holland1=46.9 Chavas20=49.8 Tao2026=55.1 Rankine=56.6 Holland2=125.5 Emanuel2=126.5
+-- R50 --
+  2001-2024: best=Willoughby2006 (24.2) | Willough=24.2 Chavas20=28.5 Holland1=29.2 Tao2026=31.9 Rankine=32.4 Holland2=58.5 Emanuel2=76.8
+  2016-2024: best=Willoughby2006 (29.4) | Willough=29.4 Holland1=31.2 Chavas20=33.4 Rankine=35.8 Tao2026=39.8 Holland2=56.4 Emanuel2=69.9
+  2020-2024: best=Willoughby2006 (26.1) | Willough=26.1 Holland1=27.7 Chavas20=28.8 Rankine=30.8 Tao2026=33.4 Holland2=55.5 Emanuel2=67.6
+-- R64 --
+  2001-2024: best=Willoughby2006 (17.3) | Willough=17.3 Tao2026=17.4 Chavas20=18.9 Rankine=20.6 Holland1=21.3 Holland2=41.5 Emanuel2=54.5
+  2016-2024: best=Willoughby2006 (18.6) | Willough=18.6 Chavas20=19.9 Holland1=20.0 Tao2026=20.9 Rankine=21.0 Holland2=38.6 Emanuel2=49.0
+  2020-2024: best=Willoughby2006 (18.5) | Willough=18.5 Chavas20=19.0 Tao2026=19.1 Rankine=19.3 Holland1=19.5 Holland2=36.9 Emanuel2=45.9
+
+=== Basin-specific re-fit demo (WNP, 2016-2024, R34) ===
+N=6785
+  Rankine alpha=0.50            : RMSE=59.3
+  Rankine best single alpha=0.542: RMSE=56.4
+  Rankine alpha(Vmax,|lat|)     : RMSE=52.7
+  Willoughby X1 scale=1.00      : RMSE=45.8
+  Willoughby best X1 scale=1.10  : RMSE=45.3
