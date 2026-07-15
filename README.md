@@ -1,5 +1,7 @@
 # Parametric Tropical Cyclone Wind Profiles for the Western North Pacific
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21357411.svg)](https://doi.org/10.5281/zenodo.21357411)
+
 Analysis code and processed data for:
 
 > Zerrudo, J. B., and M. S. Bala (2026). *A Comparison of Parametric Tropical
@@ -96,6 +98,5 @@ If you use this repository, please cite both the paper (Section above) and the
 archived code via its Zenodo DOI:
 
 > Zerrudo, J. B., and M. S. Bala (2026). *ParametricWindProfiles: analysis code
-> and processed data* (v1.0.0) [software]. Zenodo. https://doi.org/10.5281/zenodo.XXXXXXX
+> and processed data* (v1.0.0) [software]. Zenodo. https://doi.org/10.5281/zenodo.21357411
 
-(The DOI is filled in once the Zenodo archive is published.)
